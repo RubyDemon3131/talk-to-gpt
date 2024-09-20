@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatGPT Application with Voice Recording</title>
+    {% load static %}
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <script>
+        let isRecording = false;
+        let mediaRecorder;
+        let audioChunks = [];
+
+        function toggleRecording() {
+            if (!isRecording) {
+                startRecording();
+            } else {
+                stopRecording();
+            }
+        }
+
+        function startRecording() {
+            isRecording = true;
+            document.getElementById('record-button').textContent = "Stop Recording";
+
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(stream => {
+                    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                    mediaRecorder.start();
+
+                    mediaRecorder.ondataavailable = function(event) {
+                        audioChunks.push(event.data);
+                    };
+
+                    mediaRecorder.onstop = function() {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                        audioChunks = [];
+                        saveAndTranscribeAudio(audioBlob);
+                    };
+                });
+        }
+
+        function stopRecording() {
+            isRecording = false;
+            document.getElementById('record-button').textContent = "Start Recording";
+            mediaRecorder.stop();
+        }
+
+        function saveAndTranscribeAudio(audioBlob) {
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'voice_message.webm');
+
+            fetch('/whisper/', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                const transcript = data.transcript;
+                document.getElementById('message').value = transcript;
+
+                return fetch('/gpt-response/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    },
+                    body: new URLSearchParams({ message: transcript })
+                });
+            })
+            .then(response => response.json())
+            .then(data => {
+                const chatBox = document.getElementById('chat-box');
+                const transcript = document.getElementById('message').value;
+                addMessageToChat(transcript, "user");
+                addMessageToChat(data.response, "assistant");
+            })
+            .catch(error => console.error('Error processing audio:', error));
+        }
+
+        function sendMessage() {
+            const message = document.getElementById('message').value;
+            fetch('/gpt-response/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                },
+                body: new URLSearchParams({ message: message })
+            })
+            .then(response => response.json())
+            .then(data => {
+                const chatBox = document.getElementById('chat-box');
+                addMessageToChat(message, "user");
+                addMessageToChat(data.response, "assistant");
+            });
+        }
+
+        function addMessageToChat(message, sender) {
+            const chatBox = document.getElementById('chat-box');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}`;
+            messageDiv.innerHTML = `<p>${message}</p>`;
+            chatBox.appendChild(messageDiv);
+            chatBox.scrollTop = chatBox.scrollHeight; // Scroll to bottom
+        }
+    </script>
+</head>
+<body>
+    <div class="chat-container">
+        <div id="chat-box" class="chat-box"></div>
+
+        <div class="input-container">
+            <textarea id="message" placeholder="Type your message here..." rows="1" class="input-text"></textarea>
+            <button onclick="sendMessage()" class="send-button">Send</button>
+            <button id="record-button" onclick="toggleRecording()" class="record-button">Start Recording</button>
+        </div>
+    </div>
+</body>
+</html>
